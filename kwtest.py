@@ -1,5 +1,6 @@
 from typing import Collection
 from scipy import stats
+from itertools import combinations
 
 
 class OrdinalTest:
@@ -113,33 +114,83 @@ class OrdinalTest:
         return a * b
 
     def kruskal_wallis(self, alpha):
-        if not self.data:
-            raise ValueError("No data provided.")
+        if not hasattr(self, "data"):
+            raise ValueError("No data provided")
 
-        group_indices = self.get_group_indices()
-        value_ranks = self.get_ranks()
+        self.alpha = alpha
+        self.group_indices = self.get_group_indices()
+        self.value_ranks = self.get_ranks()
 
-        group_counts = self.get_group_counts(group_indices)
-        group_means = self.get_group_means(group_indices, group_counts, value_ranks)
+        self.group_counts = self.get_group_counts(self.group_indices)
+        self.group_means = self.get_group_means(
+            self.group_indices, self.group_counts, self.value_ranks
+        )
         n_cases = len(self.data["values"])
         expected_rank = (n_cases + 1) / 2
         variance = ((n_cases**2) - 1) / 12
 
-        degf = len(self.groups) - 1
+        self.degf = len(self.groups) - 1
         self.h_value = self.calculate_kw_h(
-            n_cases, group_means, group_counts, expected_rank, variance
+            n_cases, self.group_means, self.group_counts, expected_rank, variance
         )
-        self.critical_value = stats.chi2.ppf(1 - alpha, degf)
-        if self.h_value < self.critical_value:
-            self.outcome = "Null hypothesis not rejected"
-        else:
-            self.outcome = "Null hypothesis rejected"
+        self.critical_value = stats.chi2.ppf(1 - self.alpha, self.degf)
+        self.p_value = 1 - stats.chi2.cdf(self.h_value, self.degf)
+        self.outcome = (
+            "Null hypothesis rejected"
+            if self.h_value >= self.critical_value
+            else "Null hypothesis not rejected"
+        )
 
         print(
             {
-                "alpha": alpha,
+                "alpha": self.alpha,
+                "degrees of freedom": self.degf,
                 "h value": self.h_value,
                 "critical chi-square value": self.critical_value,
+                "p value": self.p_value,
                 "outcome": self.outcome,
             }
         )
+
+    def conover_iman(self):
+        if not hasattr(self, "h_value"):
+            raise ValueError(
+                "Must have rejected null hypothesis from Kruskal-Wallis test to conduct Conover-Iman test."
+            )
+
+        if self.outcome == "Null hypothesis not rejected":
+            raise ValueError(
+                "Must have rejected null hypothesis from Kruskal-Wallis test to conduct Conover-Iman test."
+            )
+
+        k = len(self.groups)
+        R = sum([value**2 for value in self.data["values"]])
+
+        self.conover_results = dict()
+        for Ri, Rj in list(combinations(self.groups, 2)):
+            n_i = len(self.group_indices[Ri])
+            n_j = len(self.group_indices[Rj])
+            n = n_i + n_j
+            diff = abs(self.group_means[Ri] - self.group_means[Rj])
+            s2 = 1 / (n - 1) * (R - ((n * (n + 1) ** 2) / 4))
+            se = s2 * ((n - 1 - self.h_value) / (n - k)) * ((1 / n_i) + (1 / n_j))
+            t_value = diff / se
+
+            degf = n - k
+            critical_value = stats.t.ppf(1 - self.alpha, degf)
+            p_value = 1 - stats.t.cdf(t_value, degf)
+            outcome = (
+                "Null hypothesis rejected"
+                if t_value >= critical_value
+                else "Null hypothesis not rejected"
+            )
+
+            self.conover_results.setdefault("Ri", []).append(Ri)
+            self.conover_results.setdefault("Rj", []).append(Rj)
+            self.conover_results.setdefault("degrees of freedom", []).append(degf)
+            self.conover_results.setdefault("t value", []).append(t_value)
+            self.conover_results.setdefault("critical value", []).append(critical_value)
+            self.conover_results.setdefault("p value", []).append(p_value)
+            self.conover_results.setdefault("outcome", []).append(outcome)
+
+        print(self.conover_results)
